@@ -2,6 +2,6 @@ services:
   - type: web
     name: tiktok-goodybag-scanner
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /api/status
     autoDeploy: true
