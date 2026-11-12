@@ -1,3 +1,4 @@
+
 services:
   - type: web
     name: tiktok-goodybag-scanner
@@ -5,3 +6,6 @@ services:
     plan: free
     healthCheckPath: /api/status
     autoDeploy: true
+    envVars:
+      - key: SCANNER_PASSWORD
+        generateValue: true
