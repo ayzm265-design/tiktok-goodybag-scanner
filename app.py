@@ -29,8 +29,7 @@ class ConnectBody(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return Path("static/index.html").read_text(encoding="utf-8")
-
+    return Path("index.html").read_text(encoding="utf-8")
 @app.post("/api/connect")
 def connect(body: ConnectBody, _auth: None = Depends(require_password)):
     global client, runner_thread
