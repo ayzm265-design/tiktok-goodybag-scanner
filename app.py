@@ -98,9 +98,10 @@ def disconnect(_auth: None = Depends(require_password)):
     return {"ok": True}
 
 @app.get("/api/status")
-def status(_auth: None = Depends(require_password)):
-    return {**state, "event_count": len(events)}
 
+def status():
+
+    return {**state, "event_count": len(events)}
 @app.get("/api/events")
 def get_events(since: int = 0, _auth: None = Depends(require_password)):
     return [e for e in list(events) if e["id"] > since]
