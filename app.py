@@ -76,6 +76,10 @@ def connect(body: ConnectBody, _auth: None = Depends(require_password)):
             @client.on(RoomEvent)
             async def on_room(event):
                 push("bilik", str(event))
+            @client.on(UnknownEvent)
+async def on_unknown(event):
+    raw = getattr(event, "raw", None)
+    push("debug", f"UnknownEvent: {repr(raw)[:500]}")
             client.run()
         except Exception as exc:
             state.update(connected=False, message=f"Gagal: {type(exc).__name__}: {exc}")
