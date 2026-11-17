@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from TikTokLive import TikTokLiveClient
-from TikTokLive.events import ConnectEvent, DisconnectEvent, CommentEvent, GiftEvent, SystemEvent, RoomEvent
+from TikTokLive.events import ConnectEvent, DisconnectEvent, CommentEvent, GiftEvent, SystemEvent, RoomEvent, UnknownEvent
 
 app = FastAPI(title="TikTok Goody Bag Scanner")
 ACCESS_PASSWORD = os.getenv("SCANNER_PASSWORD", "")
