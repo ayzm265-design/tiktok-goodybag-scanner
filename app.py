@@ -24,6 +24,49 @@ lock = threading.Lock()
 def push(kind, text, raw=None):
     events.append({"id": int(time.time()*1000), "time": time.strftime("%H:%M:%S"), "type": kind, "text": str(text), "raw": raw})
 
+def _get_attr(obj, name):
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+def _goodybag_text(obj):
+    for root_name in ("data", "message", "payload", "event"):
+        nested = _get_attr(obj, root_name)
+        if nested is not None:
+            obj = nested
+            break
+    direct = _get_attr(obj, "participate_method_content")
+    if direct:
+        return str(direct)
+    base = _get_attr(obj, "base_info")
+    detail = _get_attr(base, "common_detail")
+    value = _get_attr(detail, "participate_method_content")
+    return str(value) if value else ""
+
+def _decode_goodybag_payload(payload):
+    if not payload:
+        return None
+    try:
+        from google.protobuf import descriptor_pool, message_factory
+        pool = descriptor_pool.Default()
+        for name in ("TikTok.WebcastGoodyBagMessage", "webcast.im.WebcastGoodyBagMessage",
+                     "WebcastGoodyBagMessage"):
+            try:
+                descriptor = pool.FindMessageTypeByName(name)
+                cls = message_factory.GetMessageClass(descriptor)
+                message = cls()
+                message.ParseFromString(payload)
+                text = _goodybag_text(message)
+                if text:
+                    return text
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
 class ConnectBody(BaseModel):
     username: str
 
@@ -59,40 +102,47 @@ def connect(body: ConnectBody, _auth: None = Depends(require_password)):
             async def on_comment(event):
                 user = getattr(getattr(event, "user", None), "nickname", "Penonton")
                 comment = getattr(event, "comment", "")
-                push("komen", f"{user}: {comment}", {"comment": comment})
-                # Only surface possible instruction-like system/chat text; this is NOT verified Goody Bag data.
-                low = comment.lower()
-                if any(word in low for word in ("goody bag", "goodie bag", "kirim komentar", "comment required")):
-                    push("calon-syarat", f"Teks berkaitan Goody Bag: {user}: {comment}")
+                # Komentar penonton sengaja tidak dipaparkan; arahan mesti datang daripada event Goody Bag host.
             @client.on(GiftEvent)
             async def on_gift(event):
                 user = getattr(getattr(event, "user", None), "nickname", "Penonton")
                 gift = getattr(getattr(event, "gift", None), "name", "Hadiah")
                 count = getattr(event, "repeat_count", 1)
-                push("hadiah", f"{user} menghantar {gift} x{count}")
+                # Hadiah LIVE biasa bukan arahan Goody Bag; tidak dipaparkan.
             @client.on(SystemEvent)
             async def on_system(event):
                 push("sistem", str(event))
             @client.on(RoomEvent)
             async def on_room(event):
                 push("bilik", str(event))
+            try:
+                import TikTokLive.events as tiktok_events
+                goody_event = getattr(tiktok_events, "GoodyBagEvent", None)
+                if goody_event is not None:
+                    async def on_goodybag(event):
+                        text = _goodybag_text(event)
+                        if text:
+                            push("goodybag", text)
+                        else:
+                            push("debug", "Event Goody Bag diterima, tetapi teks arahan tiada pada medan yang dikenal pasti.")
+                    client.on(goody_event)(on_goodybag)
+            except Exception as register_error:
+                push("debug", f"Handler Goody Bag khusus tidak tersedia: {type(register_error).__name__}")
+
             @client.on(UnknownEvent)
             async def on_unknown(event):
-                # Show the Webcast method names from the raw envelope.
-                # This helps identify new event types without displaying ordinary chat text.
                 raw = getattr(event, "raw", None)
                 messages = getattr(raw, "messages", None) or []
-                if not messages:
-                    push("debug", f"UnknownEvent diterima ({type(raw).__name__})")
-                    return
                 for message in messages:
                     method = str(getattr(message, "method", "") or "UnknownMethod")
+                    if "goodybag" not in method.lower():
+                        continue
                     payload = getattr(message, "payload", b"") or b""
-                    size = len(payload) if hasattr(payload, "__len__") else 0
-                    label = "calon-goodybag" if any(
-                        word in method.lower() for word in ("goody", "envelope", "treasure")
-                    ) else "debug-event"
-                    push(label, f"Event TikTok: {method} · {size} byte")
+                    text = _decode_goodybag_payload(payload)
+                    if text:
+                        push("goodybag", text)
+                    else:
+                        push("debug", f"Event {method} diterima, tetapi payload belum dapat dinyahkod.")
 
             client.run()
         except Exception as exc:
