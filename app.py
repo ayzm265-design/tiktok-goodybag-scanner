@@ -78,8 +78,22 @@ def connect(body: ConnectBody, _auth: None = Depends(require_password)):
                 push("bilik", str(event))
             @client.on(UnknownEvent)
             async def on_unknown(event):
+                # Show the Webcast method names from the raw envelope.
+                # This helps identify new event types without displaying ordinary chat text.
                 raw = getattr(event, "raw", None)
-                push("debug", f"UnknownEvent: {repr(raw)[:500]}")
+                messages = getattr(raw, "messages", None) or []
+                if not messages:
+                    push("debug", f"UnknownEvent diterima ({type(raw).__name__})")
+                    return
+                for message in messages:
+                    method = str(getattr(message, "method", "") or "UnknownMethod")
+                    payload = getattr(message, "payload", b"") or b""
+                    size = len(payload) if hasattr(payload, "__len__") else 0
+                    label = "calon-goodybag" if any(
+                        word in method.lower() for word in ("goody", "envelope", "treasure")
+                    ) else "debug-event"
+                    push(label, f"Event TikTok: {method} · {size} byte")
+
             client.run()
         except Exception as exc:
             state.update(connected=False, message=f"Gagal: {type(exc).__name__}: {exc}")
