@@ -31,28 +31,67 @@ def _get_attr(obj, name):
         return obj.get(name)
     return getattr(obj, name, None)
 
+def _find_instruction_text(obj, depth=0, seen=None):
+    """Cari medan arahan Goody Bag dalam objek/protobuf bersarang, tanpa membaca komen biasa."""
+    if obj is None or depth > 9:
+        return ""
+    if seen is None:
+        seen = set()
+    marker = id(obj)
+    if marker in seen:
+        return ""
+    seen.add(marker)
+
+    if isinstance(obj, dict):
+        items = obj.items()
+    elif isinstance(obj, (list, tuple)):
+        items = enumerate(obj)
+    else:
+        try:
+            items = obj.ListFields()
+        except Exception:
+            try:
+                items = vars(obj).items()
+            except Exception:
+                return ""
+
+    try:
+        for key, value in items:
+            field_name = getattr(key, "name", str(key)).lower()
+            if field_name == "participate_method_content" and value:
+                return str(value)
+            found = _find_instruction_text(value, depth + 1, seen)
+            if found:
+                return found
+    except Exception:
+        return ""
+    return ""
+
 def _goodybag_text(obj):
-    for root_name in ("data", "message", "payload", "event"):
-        nested = _get_attr(obj, root_name)
-        if nested is not None:
-            obj = nested
-            break
+    # Semak terus dahulu, kemudian cari dalam struktur RoomEvent/protobuf bersarang.
     direct = _get_attr(obj, "participate_method_content")
     if direct:
         return str(direct)
-    base = _get_attr(obj, "base_info")
-    detail = _get_attr(base, "common_detail")
-    value = _get_attr(detail, "participate_method_content")
-    return str(value) if value else ""
+    for root_name in ("data", "message", "payload", "event", "common", "common_message"):
+        nested = _get_attr(obj, root_name)
+        if nested is not None:
+            found = _find_instruction_text(nested)
+            if found:
+                return found
+    return _find_instruction_text(obj)
 
-def _decode_goodybag_payload(payload):
+def _decode_goodybag_payload(payload, method=""):
     if not payload:
         return None
     try:
         from google.protobuf import descriptor_pool, message_factory
         pool = descriptor_pool.Default()
-        for name in ("TikTok.WebcastGoodyBagMessage", "webcast.im.WebcastGoodyBagMessage",
-                     "WebcastGoodyBagMessage"):
+        names = []
+        if "roommessage" in method.lower():
+            names.extend(("webcast.im.WebcastRoomMessage", "TikTok.WebcastRoomMessage", "WebcastRoomMessage"))
+        names.extend(("TikTok.WebcastGoodyBagMessage", "webcast.im.WebcastGoodyBagMessage",
+                      "WebcastGoodyBagMessage"))
+        for name in names:
             try:
                 descriptor = pool.FindMessageTypeByName(name)
                 cls = message_factory.GetMessageClass(descriptor)
@@ -100,21 +139,24 @@ def connect(body: ConnectBody, _auth: None = Depends(require_password)):
                 push("status", "Sambungan LIVE terputus")
             @client.on(CommentEvent)
             async def on_comment(event):
-                user = getattr(getattr(event, "user", None), "nickname", "Penonton")
-                comment = getattr(event, "comment", "")
-                # Komentar penonton sengaja tidak dipaparkan; arahan mesti datang daripada event Goody Bag host.
+                # Komen penonton sengaja tidak dipaparkan.
+                pass
             @client.on(GiftEvent)
             async def on_gift(event):
-                user = getattr(getattr(event, "user", None), "nickname", "Penonton")
-                gift = getattr(getattr(event, "gift", None), "name", "Hadiah")
-                count = getattr(event, "repeat_count", 1)
                 # Hadiah LIVE biasa bukan arahan Goody Bag; tidak dipaparkan.
+                pass
             @client.on(SystemEvent)
             async def on_system(event):
                 push("sistem", str(event))
             @client.on(RoomEvent)
             async def on_room(event):
-                push("bilik", str(event))
+                text = _goodybag_text(event)
+                if text:
+                    push("goodybag", text)
+                else:
+                    # Ringkasan sahaja; elakkan memaparkan dump RoomEvent yang terlalu panjang.
+                    push("debug", "RoomEvent diterima; tiada medan arahan Goody Bag yang dikenal pasti.")
+
             try:
                 import TikTokLive.events as tiktok_events
                 goody_event = getattr(tiktok_events, "GoodyBagEvent", None)
@@ -124,7 +166,7 @@ def connect(body: ConnectBody, _auth: None = Depends(require_password)):
                         if text:
                             push("goodybag", text)
                         else:
-                            push("debug", "Event Goody Bag diterima, tetapi teks arahan tiada pada medan yang dikenal pasti.")
+                            push("debug", "Event Goody Bag diterima, tetapi teks arahan tidak ditemui.")
                     client.on(goody_event)(on_goodybag)
             except Exception as register_error:
                 push("debug", f"Handler Goody Bag khusus tidak tersedia: {type(register_error).__name__}")
@@ -135,13 +177,14 @@ def connect(body: ConnectBody, _auth: None = Depends(require_password)):
                 messages = getattr(raw, "messages", None) or []
                 for message in messages:
                     method = str(getattr(message, "method", "") or "UnknownMethod")
-                    if "goodybag" not in method.lower():
+                    lowered = method.lower()
+                    if "goodybag" not in lowered and "roommessage" not in lowered:
                         continue
                     payload = getattr(message, "payload", b"") or b""
-                    text = _decode_goodybag_payload(payload)
+                    text = _decode_goodybag_payload(payload, method)
                     if text:
                         push("goodybag", text)
-                    else:
+                    elif "goodybag" in lowered:
                         push("debug", f"Event {method} diterima, tetapi payload belum dapat dinyahkod.")
 
             client.run()
@@ -166,9 +209,7 @@ def disconnect(_auth: None = Depends(require_password)):
     return {"ok": True}
 
 @app.get("/api/status")
-
 def status():
-
     return {**state, "event_count": len(events)}
 @app.get("/api/events")
 def get_events(since: int = 0, _auth: None = Depends(require_password)):
