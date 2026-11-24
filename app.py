@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from TikTokLive import TikTokLiveClient
-from TikTokLive.events import ConnectEvent, DisconnectEvent, CommentEvent, GiftEvent, SystemEvent, RoomEvent, UnknownEvent
+from TikTokLive.events import ConnectEvent, DisconnectEvent, CommentEvent, GiftEvent, SystemEvent, RoomEvent, UnknownEvent, WebsocketResponseEvent
 
 app = FastAPI(title="TikTok Goody Bag Scanner")
 ACCESS_PASSWORD = os.getenv("SCANNER_PASSWORD", "")
@@ -203,21 +203,30 @@ def connect(body: ConnectBody, _auth: None = Depends(require_password)):
             except Exception as register_error:
                 push("debug", f"Handler Goody Bag khusus tidak tersedia: {type(register_error).__name__}")
 
-            @client.on(UnknownEvent)
-            async def on_unknown(event):
+            # Tangkap envelope WebSocket mentah untuk mengesan method Goody Bag
+            # walaupun TikTokLive belum mempunyai event/protobuf khusus.
+            seen_raw_messages = set()
+            @client.on(WebsocketResponseEvent)
+            async def on_websocket_response(event):
                 raw = getattr(event, "raw", None)
                 messages = getattr(raw, "messages", None) or []
                 for message in messages:
-                    method = str(getattr(message, "method", "") or "UnknownMethod")
-                    lowered = method.lower()
-                    if "goodybag" not in lowered and "roommessage" not in lowered:
-                        continue
+                    method = str(getattr(message, "method", "") or "")
                     payload = getattr(message, "payload", b"") or b""
-                    text = _decode_goodybag_payload(payload, method)
-                    if text:
-                        push("goodybag", text)
-                    elif "goodybag" in lowered:
-                        push("debug", f"Event {method} diterima, tetapi payload belum dapat dinyahkod.")
+                    msg_id = getattr(message, "msg_id", None)
+                    identity = (method, msg_id, hash(payload) if payload else None)
+                    if identity in seen_raw_messages:
+                        continue
+                    seen_raw_messages.add(identity)
+
+                    if "goodybag" in method.lower().replace("_", ""):
+                        text = _decode_goodybag_payload(payload, method)
+                        if text:
+                            push("goodybag", text)
+                        else:
+                            push("debug", f"{method} diterima melalui WebSocket, tetapi teks arahan belum dapat dinyahkod.")
+                    elif method:
+                        push("debug", f"Method WebSocket diterima: {method}")
 
             client.run()
         except Exception as exc:
