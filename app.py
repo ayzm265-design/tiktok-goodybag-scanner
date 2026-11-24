@@ -81,30 +81,62 @@ def _goodybag_text(obj):
     return _find_instruction_text(obj)
 
 def _decode_goodybag_payload(payload, method=""):
+    """
+    Nyahkod WebcastGoodyBagMessage secara khusus.
+    TikTokLive v6 menggunakan betterproto2 dan tidak mendaftarkan mesej
+    Goody Bag ini dalam EVENT_MAPPINGS. Oleh itu, descriptor protobuf kecil
+    dibina daripada nombor medan rasmi yang diperlukan sahaja.
+    """
     if not payload:
         return None
+    if "goodybag" not in str(method).lower().replace("_", ""):
+        return None
     try:
-        from google.protobuf import descriptor_pool, message_factory
-        pool = descriptor_pool.Default()
-        names = []
-        if "roommessage" in method.lower():
-            names.extend(("webcast.im.WebcastRoomMessage", "TikTok.WebcastRoomMessage", "WebcastRoomMessage"))
-        names.extend(("TikTok.WebcastGoodyBagMessage", "webcast.im.WebcastGoodyBagMessage",
-                      "WebcastGoodyBagMessage"))
-        for name in names:
-            try:
-                descriptor = pool.FindMessageTypeByName(name)
-                cls = message_factory.GetMessageClass(descriptor)
-                message = cls()
-                message.ParseFromString(payload)
-                text = _goodybag_text(message)
-                if text:
-                    return text
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return None
+        from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+
+        file_proto = descriptor_pb2.FileDescriptorProto()
+        file_proto.name = "scanner_goodybag_payload.proto"
+        file_proto.package = "scanner.goodybag"
+        file_proto.syntax = "proto3"
+
+        detail = file_proto.message_type.add()
+        detail.name = "GoodyBagCommonDetail"
+        field = detail.field.add()
+        field.name = "participate_method_content"
+        field.number = 4
+        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+        field.type = descriptor_pb2.FieldDescriptorProto.TYPE_STRING
+
+        base = file_proto.message_type.add()
+        base.name = "GoodyBagBaseInfo"
+        field = base.field.add()
+        field.name = "common_detail"
+        field.number = 4
+        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+        field.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+        field.type_name = ".scanner.goodybag.GoodyBagCommonDetail"
+
+        root = file_proto.message_type.add()
+        root.name = "WebcastGoodyBagMessage"
+        field = root.field.add()
+        field.name = "base_info"
+        field.number = 2
+        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+        field.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+        field.type_name = ".scanner.goodybag.GoodyBagBaseInfo"
+
+        pool = descriptor_pool.DescriptorPool()
+        pool.Add(file_proto)
+        descriptor = pool.FindMessageTypeByName(
+            "scanner.goodybag.WebcastGoodyBagMessage"
+        )
+        message = message_factory.GetMessageClass(descriptor)()
+        message.ParseFromString(payload)
+        text = _goodybag_text(message)
+        return text or None
+    except Exception as exc:
+        push("debug", f"Payload Goody Bag gagal dinyahkod ({type(exc).__name__}).")
+        return None
 
 class ConnectBody(BaseModel):
     username: str
