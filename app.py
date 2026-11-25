@@ -208,25 +208,43 @@ def connect(body: ConnectBody, _auth: None = Depends(require_password)):
             seen_raw_messages = set()
             @client.on(WebsocketResponseEvent)
             async def on_websocket_response(event):
-                raw = getattr(event, "raw", None)
-                messages = getattr(raw, "messages", None) or []
+                # TikTokLive 6.x meletakkan batch pada event.raw; versi lain
+                # mungkin mendedahkan medan messages terus pada event.
+                raw = _get_attr(event, "raw")
+                if raw is None:
+                    raw = event
+                messages = _get_attr(raw, "messages") or []
+
                 for message in messages:
-                    method = str(getattr(message, "method", "") or "")
-                    payload = getattr(message, "payload", b"") or b""
-                    msg_id = getattr(message, "msg_id", None)
+                    method = str(_get_attr(message, "method") or "")
+                    payload = _get_attr(message, "payload") or b""
+                    msg_id = _get_attr(message, "msg_id")
+                    try:
+                        payload_size = len(payload)
+                    except Exception:
+                        payload_size = 0
+
                     identity = (method, msg_id, hash(payload) if payload else None)
                     if identity in seen_raw_messages:
                         continue
+                    if len(seen_raw_messages) >= 2000:
+                        seen_raw_messages.clear()
                     seen_raw_messages.add(identity)
 
-                    if "goodybag" in method.lower().replace("_", ""):
+                    normalized_method = method.lower().replace("_", "").replace("-", "")
+                    if "goodybag" in normalized_method:
                         text = _decode_goodybag_payload(payload, method)
                         if text:
                             push("goodybag", text)
                         else:
-                            push("debug", f"{method} diterima melalui WebSocket, tetapi teks arahan belum dapat dinyahkod.")
+                            push(
+                                "debug",
+                                f"{method} diterima ({payload_size} byte), tetapi teks arahan belum dapat dinyahkod."
+                            )
                     elif method:
-                        push("debug", f"Method WebSocket diterima: {method}")
+                        # Catat nama metode dan saiz sahaja; jangan dedahkan payload
+                        # mentah atau komen peribadi dalam log aktiviti.
+                        push("debug", f"Method WebSocket diterima: {method} ({payload_size} byte)")
 
             client.run()
         except Exception as exc:
